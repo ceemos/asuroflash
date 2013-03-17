@@ -22,20 +22,18 @@
 	1.1	  11.12.2003    Jan Grewe     fixed error m_endPage
 	1.2   27.08.2004    Jan Grewe     Port Scan included
  ***************************************************************************/ 
-#include "Asuro.h"
+
 
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
+#include <fstream>
 
-#ifdef LINUX
 #include "PosixSerial.h"
+#include "hexfile.h"
+
+#include "Asuro.h"
 CPosixSerial Serial;
-#elif defined  WINDOWS
-#include "WinSerial.h"
-CWinSerial Serial;
-#else
-#error Wrong OS (Linux or Windows) 
-#endif
 
 CAsuro::CAsuro()
 {
@@ -45,15 +43,16 @@ CAsuro::CAsuro()
 	m_MaxTry = 10;
 	m_TimeoutConnect = 10;
 	m_TimeoutFlash = 1;
+	m_Incremental = 1;
 }
 
 
-bool CAsuro::InitCAsuro(void)
+bool CAsuro::LoadIni(char* inifile)
 {
 	FILE* fp = NULL;
 	char line[sizeof(m_ASUROfileName)],lineCount = 0;
 
-	if (m_ASUROIniPath[0] != '\0') fp = fopen(m_ASUROIniPath,"r");
+	if (inifile[0] != '\0') fp = fopen(inifile,"r");
 	if (fp != NULL) {
 
 		rewind(fp);
@@ -64,6 +63,7 @@ bool CAsuro::InitCAsuro(void)
 				case 2: sscanf(line,"%d",(int *)&m_TimeoutConnect); break;
 				case 3: sscanf(line,"%d",(int *)&m_TimeoutFlash); break;
 				case 4: sscanf(line,"%d",(int *)&m_MaxTry); break; 
+				case 5: sscanf(line,"%d",(int *)&m_Incremental); break; 
 			}
 			lineCount ++;
 		}
@@ -73,18 +73,22 @@ bool CAsuro::InitCAsuro(void)
 	return false;
 }
 
-CAsuro::~CAsuro()
+void CAsuro::SaveIni(char* inifile)
 {
 	FILE* fp = NULL;
-	if (m_ASUROIniPath[0] != '\0') fp = fopen(m_ASUROIniPath,"w");
+	if (inifile[0] != '\0') fp = fopen(inifile,"w");
 	if (fp != NULL) {
+		
 		if (m_ASUROfileName == "") fprintf(fp,"Hex Filename \n");
 		else fprintf(fp,"%s\n",m_ASUROfileName);
+		
  		if (m_ASUROCOMPort == "") fprintf(fp,"Interface \n");
 		else fprintf(fp,"%s\n",m_ASUROCOMPort);
+		
 		fprintf(fp,"%d \t\t#Timeout Connect\n",m_TimeoutConnect);
 		fprintf(fp,"%d \t\t#Timeout Flash ('t')\n",m_TimeoutFlash);
 		fprintf(fp,"%d \t\t#MaxTry for flashing\n",m_MaxTry);
+		fprintf(fp,"%d \t\t#Flash incremental\n",m_Incremental);
 		fclose(fp);
 	}
 }
@@ -92,17 +96,12 @@ CAsuro::~CAsuro()
 bool CAsuro::Init()
 {
 	if (!Serial.Open(m_ASUROCOMPort)) {
-		ErrorText((char*)"Failed !");
+		ErrorText("Failed !");
 		return false;
 	}
 	Serial.Timeout(0);
-	SuccessText((char*)"OK !");
+	SuccessText("OK !");
 	return true;
-}
-
-bool CAsuro::PortScan(char* portName, unsigned short number, unsigned short mode)
-{
-  return Serial.Scan(portName,number,mode);
 }
 
 bool CAsuro::Connect()
@@ -113,11 +112,11 @@ bool CAsuro::Connect()
 
 	time(&t1);
 	time(&t2);
-	MessageText((char*)"Connect to ASURO --> ");
+	MessageText("Connect to ASURO --> ");
 	while (difftime(t2,t1) < m_TimeoutConnect) {
 		time(&t2);
 		if (m_ASUROCancel) {
-			ErrorText((char*)"Cancel !");	
+			ErrorText("Cancel !");	
 			return false;
 		}
 		Progress((unsigned int)(difftime(t2,t1) * 100.0) / m_TimeoutConnect);
@@ -126,202 +125,170 @@ bool CAsuro::Connect()
 		TimeWait(100);
 		ViewUpdate();
 		if (strstr(buf,"ASURO")) {
-			SuccessText((char*)"OK !");
+			SuccessText("OK !");
 			return true;
 		}
 	}
 	Progress(100);
-	ErrorText((char*)"Timeout !");
+	ErrorText("Timeout !");
 	return false;
 }
 
 bool CAsuro::BuildRAM()
 {
-	FILE *fp = NULL;
-	unsigned int address = 0, type = 0, data = 0, cksum = 0, cksumFile = 0, recordLength = 0, i;
-	char tmp[256],line[1024];
-	m_startPage = END_PAGE;
-	m_endPage = START_PAGE;
-	
-	MessageText((char*)"Bulding  RAM --> ");
-	if (m_ASUROfileName[0] != '\0') fp = fopen(m_ASUROfileName,"r");
-
-	if (fp != NULL) {
-		rewind(fp);
-		while (readLine(line,fp) != EOF) {
-			if (line[0] != ':') {
-				fclose(fp);
-				ErrorText((char*)"Wrong file format !");
-				return false;
-			}
-			cksum = 0;
-			sscanf(&line[1],"%02X",&recordLength);
-			sscanf(&line[3],"%04X",&address);
-			sscanf(&line[7],"%02X",&type);
-			// get start and end pages
-			if ((unsigned int) ((address / (PAGE_SIZE - 2)) +0.5) < m_startPage)
-				m_startPage = (unsigned int) ((address / (PAGE_SIZE - 3 )) +0.5);
-			if ((unsigned int) ((address / (PAGE_SIZE - 2)) +0.5) > m_endPage)
-				m_endPage = (unsigned int) ((address / (PAGE_SIZE - 3 )) +0.5);
-			cksum = recordLength +(unsigned char) ((address & 0xFF00) >> 8)
-							+ (unsigned char) (address & 0x00FF) + type;
-			
-			if (type == 0x00) { // data Record
-				int header = HEX_HEADER;
-#ifdef WINDOWS 
-				// Windows \n\r = 1 char as EOL
-				if (line[strlen(line)-1] == 0x0a) header ++;
-#else
-				// Unix \n = 1 char as EOL reading Windows file with \n\r as EOL is 2 char
-				if (line[strlen(line)-1] == 0x0a) header += 2;
-#endif
-				if (strlen(line) != recordLength * 2 + header) { 
-					ErrorText((char*)"HEX file line length ERROR !");
-					return false;
-				} 
-
-				for ( i = 0; i < recordLength; i++) {
-					sscanf(&line[9 + i*2],"%02X",&data);
-					cksum += data;
-					tmp[i] = data;
-				}
-				cksum = ((~cksum & 0xFF) + 1) & 0xFF;
-				sscanf(&line[9 + i*2],"%02X",&cksumFile);
-				if (cksum != cksumFile) {
-					fclose(fp);
-					ErrorText((char*)"HEX file chksum ERROR !");
-					return false;
-				}
-
-				if (address + recordLength > (MAX_PAGE * PAGE_SIZE) - BOOT_SIZE) {
-					fclose(fp);
-					ErrorText((char*)"Hex file too large or address error !!");
-					return false;
-				}
-				memcpy(&m_RAM[0][0]+address,&tmp[0],recordLength);
-			}
-			if (type == 0x01) { // End of File Record
-				SuccessText((char*)"OK !");
-				fclose(fp);
-				return true;
+	bool res = ParseHex(m_ASUROfileName, m_RAM, m_dirty);
+	if (!res) return false;
+	if (m_Incremental) {
+		Flashdata oldflash;
+		bool olddirty[MAX_PAGE];
+		memset(olddirty, 0, sizeof(olddirty));
+		memset(oldflash, 0, sizeof(oldflash));
+		res = ParseHex((char*)TMPFILE, oldflash, olddirty);
+		if (res) { // compare page by page for changes
+			for (int i = 0; i < MAX_PAGE; i++) {
+				if (olddirty[i] && m_dirty[i] && memcmp(oldflash[i], m_RAM[i], sizeof(oldflash[i])) == 0)
+					m_dirty[i] = false;
 			}
 		}
 	}
-	sprintf(line,"%s does not exist !",m_ASUROfileName);
-	ErrorText(line);
-	return false;
+	m_TotalPages = 0;
+	for (int i = 0; i < MAX_PAGE; i++) {
+		if (m_dirty[i]) m_TotalPages++;
+	}
+	return true;
 }
 
-bool CAsuro::SendPage()
+bool CAsuro::SendPage(unsigned int number)
 {
 	unsigned int crc,i,j;
 	char sendData[PAGE_SIZE]; 
 	char getData[3],tmpText[256];
 	time_t t1,t2;
-	
-	m_endPage++; // fixed 11.12.2003 
+	i = number;
 	Serial.Timeout(100);
-	for (i = m_startPage; i <= m_endPage + 1; i++) {
-		sendData[0] = i; // PageNo.
-		crc = 0;
-		memcpy(&sendData[1],&m_RAM[i][0],PAGE_SIZE - 3);
-		//Build CRC16
-		for (j = 0; j < PAGE_SIZE - 2; j++) // -2 CRC16
-			crc = CRC16(crc,sendData[j]);
-		memcpy(&sendData[j],&crc,2);
-		// Last page was send
-		if (i == m_endPage + 1) 
-			memset(sendData,0xFF,PAGE_SIZE);
-		else {
-			sprintf(tmpText,"Sending Page %03d of %03d --> ",i,m_endPage);
-			MessageText(tmpText);
-		}
+	sendData[0] = i; // PageNo.
+	crc = 0;
+	memcpy(&sendData[1],&m_RAM[i][0],PAGE_SIZE - 3);
+	//Build CRC16
+	for (j = 0; j < PAGE_SIZE - 2; j++) // -2 CRC16
+		crc = CRC16(crc,sendData[j]);
+	memcpy(&sendData[j],&crc,2);
 
-		// Try MAX_TRY times before giving up sendig data
-		for (j = 0; j < m_MaxTry; j ++) {
-			memset(getData,0x00,3);
-			Serial.Write(sendData,PAGE_SIZE);
-			Serial.ClearBuffer();
-			if ( i == m_endPage + 1) {
-				MessageText((char*)""); // just for \n
-				SuccessText((char*)"All Pages flashed !!");
-				MessageText((char*)""); // just for \n
-				SuccessText((char*)"ASURO ready to start !!");
-				Progress(100);
-				return true;
-			}
-			time(&t1);
+	// Try MAX_TRY times before giving up sendig data
+	for (j = 0; j < m_MaxTry; j++) {
+		memset(getData,0x00,3);
+		Serial.Write(sendData,PAGE_SIZE);
+		Serial.ClearBuffer();
+		
+		time(&t1);
+		time(&t2);
+		do {
 			time(&t2);
-			do {
-				time(&t2);
-				if (m_ASUROCancel == true) {
-					ErrorText((char*)"Cancel !");
-					return false;
-				}
-        Serial.Read(getData,2);
-				Serial.ClearBuffer();
-				ViewUpdate();
-			} while ((strcmp(getData,"CK") != 0) &&
-					 (strcmp(getData,"OK") != 0) &&
-					 (strcmp(getData,"ER") != 0) &&
-					 difftime(t2,t1) <= m_TimeoutFlash);
-			Progress(i*100/(m_endPage - m_startPage + 1));
-#ifdef LINUX
-      TimeWait(350);
-#endif
-      if (getData[0] == 'O' && getData[1] == 'K') {
-				SuccessText((char*)" flashed !");
-				break; // Page sended succssesfull
+			if (m_ASUROCancel == true) {
+				ErrorText("Cancel!");
+				return false;
 			}
-			if (i <= m_endPage) {
-				if (getData[0] == 'C' && getData[1] == 'K') WarningText((char*)"c"); 
-				else if (getData[0] == 'E' && getData[1] == 'R') WarningText((char*)"v");
-				else WarningText((char*)"t");  
-			}
+			Serial.Read(getData,2);
+			Serial.ClearBuffer();
+			ViewUpdate();
+		} while ((strcmp(getData,"CK") != 0) &&
+					(strcmp(getData,"OK") != 0) &&
+					(strcmp(getData,"ER") != 0) &&
+					difftime(t2,t1) <= m_TimeoutFlash);
+		TimeWait(350);
+		if (getData[0] == 'O' && getData[1] == 'K') {
+			SuccessText(" flashed !");
+			return true; // Page sended succssesfull
 		}
-
-		if (j == m_MaxTry) {
-			MessageText((char*)""); // just for \n
-			ErrorText((char*)"TIMEOUT !");	
-			MessageText((char*)""); // just for \n
-			ErrorText((char*)" ASURO dead --> FLASH damaged !!");
-			return false;
-		}
+		if (getData[0] == 'C' && getData[1] == 'K') WarningText("c"); 
+		else if (getData[0] == 'E' && getData[1] == 'R') WarningText("v");
+		else WarningText("t");  
 	}
-	return false;
+
+	if (j == m_MaxTry) {
+		MessageText(""); // just for \n
+		ErrorText("TIMEOUT !");	
+		MessageText(""); // just for \n
+		ErrorText(" ASURO dead --> FLASH damaged !!");
+		return false;
+	}
+
+	return false; // should not be reached
 }
+
+void CAsuro::FinalPage() {
+	char sendData[PAGE_SIZE]; 
+	memset(sendData,0xFF,PAGE_SIZE);
+	Serial.Write(sendData,PAGE_SIZE);
+	Serial.ClearBuffer();
+}
+
 
 void CAsuro::Programm()
 {
-char tmp[255];
+	char tmp[255];
+	int ctr = 0;
 	m_ASUROCancel = false;
-	Progress(0);
 	sprintf(tmp,"Try to initialise %s ",m_ASUROCOMPort);
 	Status(tmp);
 	sprintf(tmp,"Open %s --> ",m_ASUROCOMPort);  
 	MessageText(tmp);
 	ViewUpdate();
-	if (Init()) {
-		Status((char*)"Building  RAM !" );
-		ViewUpdate();
-		if (BuildRAM()) {
-			Status((char*)"Try to connect ASURO !" );
-			ViewUpdate();
-			Progress(0);
-			if (Connect()) {
-				Status((char*)"Flashing Firmware !" );
-				ViewUpdate();
-				if (SendPage())	Status((char*)"ASURO ready to start !" );
-				else Status((char*)"ASURO dead ?!?! (Firmware damaged try again !)" );
-			}
-			else Status((char*)"Connect to ASURO failed !");
-		}
-		else Status((char*)"Building  RAM failed !" );
+	bool res;
+	res = Init();
+	if(!res) {
+		sprintf(tmp,"Can't initialise %s !",m_ASUROCOMPort);
+		Status(tmp);
+		goto cleanup;
 	}
-	else {
-    sprintf(tmp,"Can't initialise %s !",m_ASUROCOMPort);
-    Status(tmp);
-  }
+	Status("Building  RAM !" );
+	ViewUpdate();
+	res = BuildRAM();
+	if(!res) {
+		Status("Building  RAM failed !" );
+		goto cleanup;
+	}
+	Status("Try to connect ASURO !" );
+	ViewUpdate();
+	Progress(0);
+	res = Connect();
+	if(!res) {
+		Status("Connect to ASURO failed !");
+		goto cleanup;
+	}
+	Status("Flashing Firmware !" );
+	ViewUpdate();
+	
+	for(int i = 0; i < MAX_PAGE; i++) {
+		if (m_dirty[i]) {
+			sprintf(tmp,"Sending Page %03d of %03d --> ",ctr++,m_TotalPages);
+			MessageText(tmp);
+			res = SendPage(i);
+			if(!res) break;
+		}
+	}
+	
+	FinalPage();
+	MessageText(""); // just for \n
+	SuccessText("All Pages flashed !!");
+	
+	if (!res) {
+		Status("ASURO dead ?!?! (Firmware damaged; try again!)" );
+		if (m_Incremental) { // Might be outdated
+			unlink(TMPFILE);
+		}
+	} else {
+		Status("ASURO ready to start!" );
+		if (m_Incremental) { // Save hexfile
+			std::ifstream source(m_ASUROfileName, std::ios::binary);
+			std::ofstream dest(TMPFILE, std::ios::binary);
+			dest << source.rdbuf();
+			source.close();
+			dest.close();
+		}
+	}
+	
+cleanup:
 	Serial.Close();
 }
 
@@ -365,16 +332,7 @@ const unsigned int CRCtbl[ 256 ] = {
    return ( crc >> 8 ) ^ CRCtbl[ ( crc & 0xFF ) ^ data];     
 }
 
-char CAsuro::readLine(char* line, FILE *fp)
-{
-	char c;
-	unsigned int i = 0;
-	do {
-		c = fgetc(fp);
-		if (c == EOF) 
-			return EOF;
-		line[i++] = c;
-	} while (c != '\n');
-	line[i] = '\0';
-	return true;
-}
+
+
+
+// kate: tab-width 4; indent-width 4; space-indent off;

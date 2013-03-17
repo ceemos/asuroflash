@@ -1,9 +1,8 @@
 /***************************************************************************
-                               PosixSerial.h
+                 hexfile.h -- parse IHex files to Asuro Pages
                            -------------------
-    begin               : Die Aug 12 10:16:57 CEST 2003
-    copyright       : (C) 2003-2004 DLR RM by Jan Grewe
-    email               : jan.grewe@gmx.de
+    begin               : Sun Mar 17 16:21:05 CET 2013
+
  ***************************************************************************/
 
 /***************************************************************************
@@ -15,29 +14,16 @@
  *                                                                         *
  ***************************************************************************/
 
-#ifndef POSIXSERIAL_H
-#define POSIXSERIAL_H
+#ifndef HEXFILE_H
+#define HEXFILE_H
 
-#if defined LINUX || defined _LINUX || defined _LINUX_
-#define LINUX
+#define MAX_PAGE  128    // AtmelMega8 8kByte Flash
+#define PAGE_SIZE 64 + 3 // Bytes +1PageNo +2 CRC16
+#define BOOT_SIZE 1024   // Bytes
+
+#define HEX_HEADER 1+2+4+2+2 // : + recordLength + address + type + chksum
+
+typedef unsigned char Flashdata[MAX_PAGE][PAGE_SIZE - 3]; //-1PageNo -2CRC16 
+bool ParseHex(char* file, Flashdata m_Ram, bool m_dirty[]);
+char readLine(char* line, FILE *fp);
 #endif
-#include <termios.h>
-
-
-class CPosixSerial
-{
-public:
-	bool Open(char* port);
-	void Close(void);
-	void ClearBuffer(void);
-	int Read(char* data, unsigned int length);
-	int Write(char* data, unsigned int length);
-	void Timeout(unsigned int timeout); //msec
-        int m_portHandle;
-        struct termios CommConfig;
-
-	char m_portName[256];
-
-};
-#endif
-
