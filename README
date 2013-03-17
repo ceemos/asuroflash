@@ -1,0 +1,7 @@
+A tool to flash Asuro:
+http://www.dlr.de/rm/en/desktopdefault.aspx/tabid-3848/
+
+Based on the original Asuro 'con_flash' tool by Jan Grewe, Stripped of automake.
+
+Compiling for Linux:
+ g++ -D_LINUX -D_CONSOLE *.cpp -o asuroflash
