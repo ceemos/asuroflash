@@ -182,15 +182,30 @@ bool CAsuro::SendPage(unsigned int number)
 		
 		time(&t1);
 		time(&t2);
+		// read one extra byte. The loop will read all sent data, and an odd 
+		// number of bytes ist sent, so data won't align otherwise.
+		Serial.Read(getData,1);
 		do {
 			time(&t2);
 			if (m_ASUROCancel == true) {
 				ErrorText("Cancel!");
 				return false;
 			}
-			Serial.Read(getData,2);
+			
+			int count = Serial.Read(getData,2);
+			if (count < 2)  // read the second byte if missing
+				Serial.Read(getData+1,1);
+			
 			Serial.ClearBuffer();
 			ViewUpdate();
+			
+#ifdef DEBUG
+			for (int k = 0; k < 2; k++)
+				if (getData[k] > 'A' && getData[k] < 'Z') fprintf(stderr, "%c", getData[k]);
+				else fprintf(stderr, ".");
+			fprintf(stderr, " ");
+#endif
+			
 		} while ((strcmp(getData,"CK") != 0) &&
 					(strcmp(getData,"OK") != 0) &&
 					(strcmp(getData,"ER") != 0) &&
