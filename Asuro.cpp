@@ -138,6 +138,12 @@ bool CAsuro::BuildRAM()
 {
 	bool res = ParseHex(m_ASUROfileName, m_RAM, m_dirty);
 	if (!res) return false;
+	
+	int newpages = 0;
+	for (int i = 0; i < MAX_PAGE; i++) {
+		if (m_dirty[i]) newpages++;
+	}
+	
 	if (m_Incremental) {
 		Flashdata oldflash;
 		bool olddirty[MAX_PAGE];
@@ -151,10 +157,16 @@ bool CAsuro::BuildRAM()
 			}
 		}
 	}
+	
 	m_TotalPages = 0;
 	for (int i = 0; i < MAX_PAGE; i++) {
 		if (m_dirty[i]) m_TotalPages++;
 	}
+	
+	char tmp[64];
+	sprintf(tmp,"Updating %d of %d pages.",m_TotalPages, newpages);
+	MessageText(tmp);
+	
 	return true;
 }
 
@@ -185,6 +197,7 @@ bool CAsuro::SendPage(unsigned int number)
 		// read one extra byte. The loop will read all sent data, and an odd 
 		// number of bytes ist sent, so data won't align otherwise.
 		Serial.Read(getData,1);
+		int ctr = PAGE_SIZE / 2;
 		do {
 			time(&t2);
 			if (m_ASUROCancel == true) {
@@ -206,11 +219,12 @@ bool CAsuro::SendPage(unsigned int number)
 			fprintf(stderr, " ");
 #endif
 			
-		} while ((strcmp(getData,"CK") != 0) &&
+		} while (	ctr-- > 0 || (
+					(strcmp(getData,"CK") != 0) &&
 					(strcmp(getData,"OK") != 0) &&
 					(strcmp(getData,"ER") != 0) &&
-					difftime(t2,t1) <= m_TimeoutFlash);
-		TimeWait(350);
+					difftime(t2,t1) <= m_TimeoutFlash));
+		TimeWait(50);
 		if (getData[0] == 'O' && getData[1] == 'K') {
 			SuccessText(" flashed !");
 			return true; // Page sended succssesfull

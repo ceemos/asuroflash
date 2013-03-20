@@ -18,7 +18,7 @@
 #define HEXFILE_H
 
 #define MAX_PAGE  128    // AtmelMega8 8kByte Flash
-#define PAGE_SIZE 64 + 3 // Bytes +1PageNo +2 CRC16
+#define PAGE_SIZE (64 + 3) // Bytes +1PageNo +2 CRC16
 #define BOOT_SIZE 1024   // Bytes
 
 #define HEX_HEADER 1+2+4+2+2 // : + recordLength + address + type + chksum
